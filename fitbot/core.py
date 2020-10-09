@@ -2,6 +2,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, PicklePersistence
 from telegram import ParseMode
 
+from datetime import datetime
+
 import fitbot.credentials as cred
 
 
@@ -14,7 +16,8 @@ def start(update, context):
     if "args" not in context.user_data:
         context.user_data["args"] = {}
     menu = [
-        [InlineKeyboardButton("Workouts", callback_data="show_workouts")]
+        [InlineKeyboardButton("Workout starten", callback_data="start_workout")],
+        [InlineKeyboardButton("Workouts anzeigen", callback_data="show_workouts")]
     ]
     create_callback_menu(update, "Bitte wähle eine Aktion aus:", menu)
 
@@ -32,6 +35,7 @@ def show_workout(update, context, name):
     for ex in context.user_data["workouts"][name]["exercises"]:
         text += f"\n- {ex['name']}"
     menu = [
+        [InlineKeyboardButton("Workout umbenennen", callback_data=f"edit_workout_name {name}")],
         [InlineKeyboardButton("Übungen bearbeiten", callback_data=f"show_exercises {name}")],
         [InlineKeyboardButton("- Zurück", callback_data="show_workouts")]
     ]
@@ -43,6 +47,23 @@ def get_workout_name(update, context):  # TODO: currently no names with whitespa
     query.edit_message_text("Füge ein neues Workout hinzu.\n"
                             "Gib deinem Workout einen Namen:")
     context.user_data["callback"] = create_workout
+
+
+def edit_workout_name(update, context, name):  # TODO: currently no names with whitespaces possible
+    query = update.callback_query
+    query.edit_message_text("Gib einen neuen Namen für das Workout an:")
+    context.user_data["callback"] = set_workout_name
+    context.user_data["args"] = {"name": name}
+    # TODO: update names in training history
+
+
+def set_workout_name(update, context, params):
+    old_name = params["name"]
+    new_name = params["msg"]
+    context.user_data["workouts"][new_name] = context.user_data["workouts"][old_name]
+    context.user_data["workouts"].pop(old_name)
+    clear_callback(context)
+    show_workout(update, context, new_name)
 
 
 def create_workout(update, context, params):
@@ -58,7 +79,6 @@ def create_workout(update, context, params):
 
 
 def show_exercises(update, context, name):
-    query = update.callback_query
     text = f"Wähle eine Übung von {name} zum Bearbeiten aus:"
     menu = [[InlineKeyboardButton(ex["name"], callback_data=f"show_exercise {name} {i}")]
             for i, ex in enumerate(context.user_data["workouts"][name]["exercises"])]
@@ -88,6 +108,7 @@ def show_exercise(update, context, name, idx):
             [InlineKeyboardButton(f"Name: {ex['name']}", callback_data=f"edit_exercise {name} {idx} name")],
             [InlineKeyboardButton(f"Sätze: {ex['sets']}", callback_data=f"edit_exercise {name} {idx} sets")],
             [InlineKeyboardButton(f"Wiederholungen: {ex['reps']}", callback_data=f"edit_exercise {name} {idx} reps")],
+            [InlineKeyboardButton("- Löschen", callback_data=f"remove_exercise {name} {idx}")],
             [InlineKeyboardButton("- Zurück", callback_data=f"show_exercises {name}")]
         ]
         create_callback_menu(update, text, menu)
@@ -117,6 +138,66 @@ def edit_exercise_property(update, context, params):
     show_exercise(update, context, workout_name, exercise_idx)
 
 
+def remove_exercise(update, context, name, idx):
+    context.user_data["workouts"][name]["exercises"].pop(idx)
+    clear_callback(context)
+    show_exercises(update, context, name)
+
+
+def start_workout(update, context):
+    text = "Wähle ein Workout aus:"
+    menu = [[InlineKeyboardButton(n, callback_data=f"save_workout_perf {n} 0")] for n in context.user_data["workouts"]]
+    menu.append([InlineKeyboardButton("- Zurück", callback_data="cancel")])
+    create_callback_menu(update, text, menu)
+
+
+def save_workout_perf(update, context, name, curr_idx):
+    query = update.callback_query
+    text = f"*Aktuelle Übung: {context.user_data['workouts'][name]['exercises'][curr_idx]['name']}*"
+    if curr_idx > 0:
+        text = f"Letzte Übung: {context.user_data['workouts'][name]['exercises'][curr_idx-1]['name']}\n" + text
+    if curr_idx < len(context.user_data['workouts'][name]['exercises'])-1:
+        text += f"\nNächste Übung: {context.user_data['workouts'][name]['exercises'][curr_idx+1]['name']}"
+    text += "\n\nMit welchem Gewicht hast du die Übung durchgeführt?\nBitte gib eine Zahl an:"
+
+    if query is None:
+        update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    else:
+        query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+    context.user_data["callback"] = save_workout_perf_weight
+    context.user_data["args"] = {"workout_name": name, "exercise_idx": curr_idx}
+
+
+def save_workout_perf_weight(update, context, params):
+    workout_name = params["workout_name"]
+    exercise_idx = params["exercise_idx"]
+    weight = int(params["msg"])
+    clear_callback(context)
+    if exercise_idx == 0:
+        if "workout_histories" not in context.user_data:
+            context.user_data["workout_histories"] = []
+        date = datetime.today().strftime("%Y-%m-%d")
+        time = datetime.today().strftime("%H:%M")
+        context.user_data["workout_histories"].append(
+            {"date": date, "time_start": time, "name": workout_name, "exercises": []}
+        )
+
+    idx = len(context.user_data["workout_histories"])-1
+    # context.user_data["workout_histories"][idx]["exercises"][exercise_idx] = \
+    #     context.user_data["workouts"][workout_name]["exercises"][exercise_idx]
+    context.user_data["workout_histories"][idx]["exercises"].append(
+        context.user_data["workouts"][workout_name]["exercises"][exercise_idx]
+    )
+    context.user_data["workout_histories"][idx]["exercises"][exercise_idx]["weigth"] = weight
+
+    if exercise_idx == len(context.user_data["workouts"][workout_name]["exercises"])-1:
+        time = datetime.today().strftime("%H:%M")
+        context.user_data["workout_histories"][idx]["time_end"] = time
+        start(update, context)  # TODO: change to history view
+    else:
+        save_workout_perf(update, context, workout_name, exercise_idx+1)
+
+
 def create_callback_menu(update, text, menu):
     if update.message is not None:
         update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(menu), parse_mode=ParseMode.MARKDOWN)
@@ -128,18 +209,29 @@ def create_callback_menu(update, text, menu):
 def callback_query_handler(update, context):
     input_list = update.callback_query.data.split(" ")
     update.callback_query.answer()
+    # editing workouts
     if input_list[0] == 'show_workouts':
         show_workouts(update, context)
     elif input_list[0] == 'show_workout':
         show_workout(update, context, input_list[1])
     elif input_list[0] == 'add_workout':
         get_workout_name(update, context)
+    elif input_list[0] == 'edit_workout_name':
+        edit_workout_name(update, context, input_list[1])
     elif input_list[0] == 'show_exercises':
         show_exercises(update, context, input_list[1])
     elif input_list[0] == 'show_exercise':
         show_exercise(update, context, input_list[1], int(input_list[2]))
     elif input_list[0] == 'edit_exercise':
         edit_exercise(update, context, input_list[1], int(input_list[2]), input_list[3])
+    elif input_list[0] == 'remove_exercise':
+        remove_exercise(update, context, input_list[1], int(input_list[2]))
+    # adding workout performance
+    elif input_list[0] == 'start_workout':
+        start_workout(update, context)
+    elif input_list[0] == 'save_workout_perf':
+        save_workout_perf(update, context, input_list[1], int(input_list[2]))
+    # default
     elif input_list[0] == 'cancel':
         start(update, context)
     else:
