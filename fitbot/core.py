@@ -32,13 +32,13 @@ def show_workout(update, context, name):
     for ex in context.user_data["workouts"][name]["exercises"]:
         text += f"\n- {ex['name']}"
     menu = [
-        [InlineKeyboardButton("Übungen bearbeiten", callback_data=f"edit_exercises {name}")],
+        [InlineKeyboardButton("Übungen bearbeiten", callback_data=f"show_exercises {name}")],
         [InlineKeyboardButton("- Zurück", callback_data="show_workouts")]
     ]
     create_callback_menu(update, text, menu)
 
 
-def get_workout_name(update, context):
+def get_workout_name(update, context):  # TODO: currently no names with whitespaces possible
     query = update.callback_query
     query.edit_message_text("Füge ein neues Workout hinzu.\n"
                             "Gib deinem Workout einen Namen:")
@@ -54,15 +54,15 @@ def create_workout(update, context, params):
         context.user_data["callback"] = create_workout
     else:
         context.user_data["workouts"][name] = {"name": name, "exercises": []}
-        edit_exercises(update, context, name)
+        show_exercises(update, context, name)
 
 
-def edit_exercises(update, context, name):
+def show_exercises(update, context, name):
     query = update.callback_query
     text = f"Wähle eine Übung von {name} zum Bearbeiten aus:"
-    menu = [[InlineKeyboardButton(ex["name"], callback_data=f"edit_exercise {name} {i}")]
+    menu = [[InlineKeyboardButton(ex["name"], callback_data=f"show_exercise {name} {i}")]
             for i, ex in enumerate(context.user_data["workouts"][name]["exercises"])]
-    menu.append([InlineKeyboardButton("+ Übung hinzufügen", callback_data=f"edit_exercise {name} -1")])
+    menu.append([InlineKeyboardButton("+ Übung hinzufügen", callback_data=f"show_exercise {name} -1")])
     menu.append([InlineKeyboardButton("- Zurück", callback_data=f"show_workout {name}")])
     create_callback_menu(update, text, menu)
 
@@ -71,18 +71,50 @@ def add_exercise(update, context, params):
     workout_name = params["workout_name"]
     exercise_name = params["msg"]
     clear_callback(context)
-    context.user_data["workouts"][workout_name]["exercises"].append({"name": exercise_name})
-    edit_exercises(update, context, workout_name)
+    context.user_data["workouts"][workout_name]["exercises"].append({"name": exercise_name, "sets": "3", "reps": "12"})
+    show_exercises(update, context, workout_name)
 
 
-def edit_exercise(update, context, name, idx):
+def show_exercise(update, context, name, idx):
     query = update.callback_query
     if idx == -1:
         query.edit_message_text(text="Gib der Übung einen Namen:")
         context.user_data["callback"] = add_exercise
         context.user_data["args"] = {"workout_name": name}
     else:
-        pass  # TODO
+        ex = context.user_data["workouts"][name]["exercises"][idx]
+        text = f"Was möchtest du bearbeiten?"
+        menu = [
+            [InlineKeyboardButton(f"Name: {ex['name']}", callback_data=f"edit_exercise {name} {idx} name")],
+            [InlineKeyboardButton(f"Sätze: {ex['sets']}", callback_data=f"edit_exercise {name} {idx} sets")],
+            [InlineKeyboardButton(f"Wiederholungen: {ex['reps']}", callback_data=f"edit_exercise {name} {idx} reps")],
+            [InlineKeyboardButton("- Zurück", callback_data=f"show_exercises {name}")]
+        ]
+        create_callback_menu(update, text, menu)
+
+
+def edit_exercise(update, context, name, idx, param):
+    param_text = ""
+    if param == "name":
+        param_text = "Gib einen neuen Namen für die Übung ein:"
+    elif param == "sets":
+        param_text = "Gib eine Anzahl an Sätzen für die Übung ein:"
+    elif param == "reps":
+        param_text = "Gib eine Anzahl an Wiederholungen für die Übung ein:"
+    query = update.callback_query
+    query.edit_message_text(param_text)
+    context.user_data["callback"] = edit_exercise_property
+    context.user_data["args"] = {"workout_name": name, "exercise_idx": idx, "property": param}
+
+
+def edit_exercise_property(update, context, params):
+    workout_name = params["workout_name"]
+    exercise_idx = params["exercise_idx"]
+    property_key = params["property"]
+    property_val = params["msg"]
+    context.user_data["workouts"][workout_name]["exercises"][exercise_idx][property_key] = property_val
+    clear_callback(context)
+    show_exercise(update, context, workout_name, exercise_idx)
 
 
 def create_callback_menu(update, text, menu):
@@ -102,10 +134,12 @@ def callback_query_handler(update, context):
         show_workout(update, context, input_list[1])
     elif input_list[0] == 'add_workout':
         get_workout_name(update, context)
-    elif input_list[0] == 'edit_exercises':
-        edit_exercises(update, context, input_list[1])
+    elif input_list[0] == 'show_exercises':
+        show_exercises(update, context, input_list[1])
+    elif input_list[0] == 'show_exercise':
+        show_exercise(update, context, input_list[1], int(input_list[2]))
     elif input_list[0] == 'edit_exercise':
-        edit_exercise(update, context, input_list[1], int(input_list[2]))
+        edit_exercise(update, context, input_list[1], int(input_list[2]), input_list[3])
     elif input_list[0] == 'cancel':
         start(update, context)
     else:
